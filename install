@@ -6,7 +6,16 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-exec node --input-type=module - "$@" <<'__T3_SOVEREIGN_INSTALLER_3B9C90F2__'
+installer_directory="$(mktemp -d "${TMPDIR:-/tmp}/t3-sovereign-installer.XXXXXX")"
+installer_module="$installer_directory/install.mjs"
+cleanup_installer() {
+  rm -rf -- "$installer_directory"
+}
+trap cleanup_installer EXIT
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
+
+cat > "$installer_module" <<'__T3_SOVEREIGN_INSTALLER_3B9C90F2__'
 /* oxlint-disable t3code/no-global-process-runtime -- Published standalone installer. */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -398,3 +407,10 @@ try {
 }
 
 __T3_SOVEREIGN_INSTALLER_3B9C90F2__
+
+chmod 600 "$installer_module"
+if [ -r /dev/tty ]; then
+  node "$installer_module" "$@" < /dev/tty
+else
+  node "$installer_module" "$@"
+fi
