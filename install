@@ -376,6 +376,25 @@ async function main() {
   }
 }
 
-await main();
+try {
+  await main();
+} catch (cause) {
+  const childStatus =
+    typeof cause === "object" &&
+    cause !== null &&
+    "status" in cause &&
+    Number.isInteger(cause.status)
+      ? cause.status
+      : undefined;
+  const message =
+    childStatus === 130
+      ? "Installation cancelled."
+      : cause instanceof Error
+        ? cause.message
+        : String(cause);
+  process.stderr.write(`Sovereign T3 installer failed: ${message}\n`);
+  process.exitCode =
+    childStatus !== undefined && childStatus > 0 && childStatus <= 255 ? childStatus : 1;
+}
 
 __T3_SOVEREIGN_INSTALLER_3B9C90F2__
