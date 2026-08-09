@@ -38,7 +38,6 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 import * as NodeStreamPromises from "node:stream/promises";
 
@@ -49,17 +48,7 @@ const ARTIFACT_FILE_NAME = "t3-sovereign-runtime-linux-x64.tar.gz";
 const MANIFEST_FILE_NAME = "linux-x64.manifest.json";
 const MAX_DOCUMENT_BYTES = 128 * 1024;
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
-const DEFAULT_CONTROL_PLANE_ORIGIN = "https://code.moondiner.com";
 const CONTROL_PLANE_DISCOVERY_PATH = "/.well-known/t3-sovereign.json";
-const DEFAULT_CONTROL_PLANE_PROFILE = {
-  schemaVersion: 1,
-  origin: DEFAULT_CONTROL_PLANE_ORIGIN,
-  hostedAppUrl: DEFAULT_CONTROL_PLANE_ORIGIN,
-  oauthIssuer: "https://auth.moondiner.com/api/auth",
-  oauthClientId: "t3-code",
-  oauthResource: "https://relay.moondiner.com",
-  relayUrl: "https://relay.moondiner.com",
-};
 
 function normalizeOrigin(value, label) {
   const url = new URL(value.trim());
@@ -134,45 +123,33 @@ function normalizeEnvironmentLabel(value) {
   return label;
 }
 
-async function promptQuestions(questions) {
+export async function promptQuestions(
+  questions,
+  { input = process.stdin, output = process.stdout } = {},
+) {
   let cancelled = false;
+  const controller = new AbortController();
+  const NodeReadlinePromises = await import("node:readline/promises");
+  const prompt = NodeReadlinePromises.createInterface({ input, output });
+  prompt.once("SIGINT", () => {
+    cancelled = true;
+    controller.abort();
+  });
   try {
-    const input = NodeFS.createReadStream("/dev/tty");
-    const output = NodeFS.createWriteStream("/dev/tty");
-    const prompt = NodeReadline.createInterface({ input, output });
-    let rejectPendingQuestion;
-    prompt.once("SIGINT", () => {
-      cancelled = true;
-      rejectPendingQuestion?.(new Error("Installation cancelled."));
-      prompt.close();
-    });
-    try {
-      const answers = [];
-      for (const question of questions) {
-        answers.push(
-          await new Promise((resolve, reject) => {
-            rejectPendingQuestion = reject;
-            prompt.question(question, (answer) => {
-              rejectPendingQuestion = undefined;
-              resolve(answer);
-            });
-          }),
-        );
-      }
-      return answers;
-    } finally {
-      rejectPendingQuestion = undefined;
-      prompt.close();
-      input.destroy();
-      output.end();
+    const answers = [];
+    for (const question of questions) {
+      answers.push(await prompt.question(question, { signal: controller.signal }));
     }
+    return answers;
   } catch (cause) {
     if (cancelled) {
       const cancellation = new Error("Installation cancelled.", { cause });
       cancellation.status = 130;
       throw cancellation;
     }
-    return questions.map(() => "");
+    throw new Error("Could not read installer input from the controlling terminal.", { cause });
+  } finally {
+    prompt.close();
   }
 }
 
@@ -199,31 +176,40 @@ async function configureRuntimeSettings(baseDir, command) {
     if (!(cause instanceof Error && "code" in cause && cause.code === "ENOENT")) throw cause;
   }
 
+  const configuredOrigin = process.env.T3CODE_CONTROL_PLANE_URL?.trim() || "";
+  const configuredLabel = process.env.T3CODE_ENVIRONMENT_LABEL?.trim() || "";
+  const questions = [];
+  if (command[0] === "serve" && profile === undefined) {
+    questions.push(
+      configuredOrigin
+        ? `Sovereign control-plane URL [${configuredOrigin}]: `
+        : "Sovereign control-plane URL: ",
+    );
+  }
+  if (command[0] === "serve" && label === undefined) {
+    questions.push(
+      configuredLabel
+        ? `Environment display label [${configuredLabel}]: `
+        : "Environment display label: ",
+    );
+  }
+  const answers = questions.length > 0 ? await promptQuestions(questions) : [];
+  let answerIndex = 0;
+  const controlPlaneAnswer =
+    command[0] === "serve" && profile === undefined ? (answers[answerIndex++] ?? "") : "";
+  const labelAnswer =
+    command[0] === "serve" && label === undefined ? (answers[answerIndex++] ?? "") : "";
+
   if (profile === undefined) {
-    const defaultOrigin =
-      process.env.T3CODE_CONTROL_PLANE_URL?.trim() || DEFAULT_CONTROL_PLANE_ORIGIN;
-    const [answer] =
-      command[0] === "serve"
-        ? await promptQuestions([`Sovereign control-plane URL [${defaultOrigin}]: `])
-        : [""];
-    const origin = normalizeOrigin(answer.trim() || defaultOrigin, "Control-plane URL");
-    let discovered;
-    try {
-      discovered = await fetchControlPlaneDocument(origin);
-    } catch (cause) {
-      if (
-        origin !== DEFAULT_CONTROL_PLANE_ORIGIN ||
-        !(cause instanceof Error && "code" in cause && cause.code === "DISCOVERY_UNAVAILABLE")
-      ) {
-        throw cause;
-      }
-      process.stderr.write(
-        "Control-plane discovery is not available yet; using the trusted installer's Moondiner defaults.\n",
-      );
-      discovered = DEFAULT_CONTROL_PLANE_PROFILE;
+    const requestedOrigin = controlPlaneAnswer.trim() || configuredOrigin;
+    if (!requestedOrigin && command[0] === "serve") {
+      throw new Error("A sovereign control-plane URL is required.");
     }
-    profile = validateControlPlaneDocument(discovered, origin);
-    await writePrivateFileAtomically(profilePath, `${JSON.stringify(profile, null, 2)}\n`);
+    if (requestedOrigin) {
+      const origin = normalizeOrigin(requestedOrigin, "Control-plane URL");
+      profile = validateControlPlaneDocument(await fetchControlPlaneDocument(origin), origin);
+      await writePrivateFileAtomically(profilePath, `${JSON.stringify(profile, null, 2)}\n`);
+    }
   } else {
     profile = validateControlPlaneDocument(
       profile,
@@ -232,19 +218,19 @@ async function configureRuntimeSettings(baseDir, command) {
   }
 
   if (label === undefined) {
-    const defaultLabel = normalizeEnvironmentLabel(
-      process.env.T3CODE_ENVIRONMENT_LABEL?.trim() || NodeOS.hostname() || "T3 environment",
-    );
-    const [answer] =
-      command[0] === "serve"
-        ? await promptQuestions([`Environment display label [${defaultLabel}]: `])
-        : [""];
-    label = normalizeEnvironmentLabel(answer.trim() || defaultLabel);
-    await writePrivateFileAtomically(labelPath, `${label}\n`);
+    const requestedLabel = labelAnswer.trim() || configuredLabel;
+    if (!requestedLabel && command[0] === "serve") {
+      throw new Error("An environment display label is required.");
+    }
+    if (requestedLabel) {
+      label = normalizeEnvironmentLabel(requestedLabel);
+      await writePrivateFileAtomically(labelPath, `${label}\n`);
+    }
   }
 
-  process.stdout.write(`Control plane: ${profile.origin}\nEnvironment label: ${label}\n`);
-  return controlPlaneEnvironment(profile);
+  if (profile !== undefined) process.stdout.write(`Control plane: ${profile.origin}\n`);
+  if (label !== undefined) process.stdout.write(`Environment label: ${label}\n`);
+  return profile === undefined ? {} : controlPlaneEnvironment(profile);
 }
 
 function decodeCanonicalBase64(value, label) {
@@ -665,26 +651,30 @@ async function main() {
   }
 }
 
-try {
-  await main();
-} catch (cause) {
-  const childStatus =
-    typeof cause === "object" &&
-    cause !== null &&
-    "status" in cause &&
-    Number.isInteger(cause.status)
-      ? cause.status
-      : undefined;
-  const message =
-    childStatus === 130
-      ? "Installation cancelled."
-      : cause instanceof Error
-        ? cause.message
-        : String(cause);
-  process.stderr.write(`Sovereign T3 installer failed: ${message}\n`);
-  process.exitCode =
-    childStatus !== undefined && childStatus > 0 && childStatus <= 255 ? childStatus : 1;
+export async function runInstaller() {
+  try {
+    await main();
+  } catch (cause) {
+    const childStatus =
+      typeof cause === "object" &&
+      cause !== null &&
+      "status" in cause &&
+      Number.isInteger(cause.status)
+        ? cause.status
+        : undefined;
+    const message =
+      childStatus === 130
+        ? "Installation cancelled."
+        : cause instanceof Error
+          ? cause.message
+          : String(cause);
+    process.stderr.write(`Sovereign T3 installer failed: ${message}\n`);
+    process.exitCode =
+      childStatus !== undefined && childStatus > 0 && childStatus <= 255 ? childStatus : 1;
+  }
 }
+
+if (process.argv[1] === new URL(import.meta.url).pathname) await runInstaller();
 
 __T3_SOVEREIGN_INSTALLER_3B9C90F2__
 
