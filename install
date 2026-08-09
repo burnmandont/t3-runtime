@@ -299,6 +299,25 @@ function isBackgroundServiceActive() {
   );
 }
 
+function isBackgroundServiceInstalled() {
+  return (
+    NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "--quiet", "t3code.service"], {
+      stdio: "ignore",
+    }).status === 0
+  );
+}
+
+function reconcileInstalledBackgroundService(entryPath, baseDir) {
+  if (!isBackgroundServiceInstalled()) return;
+  NodeChildProcess.execFileSync(process.execPath, [entryPath, "service", "update"], {
+    stdio: "inherit",
+    env: { ...process.env, T3CODE_HOME: baseDir },
+  });
+  if (!isBackgroundServiceActive()) {
+    throw new Error("The updated T3 Code background service did not become active.");
+  }
+}
+
 function runRequestedCommand(entryPath, baseDir, command) {
   if (command[0] === "serve") {
     const status = readConnectStatus(entryPath, baseDir);
@@ -342,6 +361,12 @@ async function main() {
   );
   const entryPath = await installRuntime(baseDir, version);
   const binDir = await configureInstallation(baseDir, version);
+  // An installed boot service is launcher-pinned through service-state.json.
+  // Merely writing current-version would leave both the stable CLI wrapper and
+  // the live child on the previous release. Reconcile through the runtime's
+  // service command so it replaces the launcher/state atomically and restarts
+  // the service, while preserving the existing repair path on failure.
+  reconcileInstalledBackgroundService(entryPath, baseDir);
   process.stdout.write(`Installed verified sovereign T3 ${version}.\n`);
   if (!(process.env.PATH ?? "").split(NodePath.delimiter).includes(binDir)) {
     process.stdout.write(`Add ${binDir} to PATH to use the t3 command in future shells.\n`);
