@@ -6,6 +6,21 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+node_version="$(node -p 'process.versions.node' 2>/dev/null || true)"
+node_major="${node_version%%.*}"
+node_version_rest="${node_version#*.}"
+node_minor="${node_version_rest%%.*}"
+case "$node_major:$node_minor" in
+  *[!0-9:]*|:|*:)
+    echo "Could not determine the installed Node version. Node 22.16 or newer is required." >&2
+    exit 1
+    ;;
+esac
+if [ "$node_major" -lt 22 ] || { [ "$node_major" -eq 22 ] && [ "$node_minor" -lt 16 ]; }; then
+  echo "Node 22.16 or newer is required to install sovereign T3; found Node $node_version." >&2
+  exit 1
+fi
+
 installer_directory="$(mktemp -d "${TMPDIR:-/tmp}/t3-sovereign-installer.XXXXXX")"
 installer_module="$installer_directory/install.mjs"
 cleanup_installer() {
@@ -23,7 +38,7 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeReadlinePromises from "node:readline/promises";
+import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 import * as NodeStreamPromises from "node:stream/promises";
 
@@ -124,16 +139,29 @@ async function promptQuestions(questions) {
   try {
     const input = NodeFS.createReadStream("/dev/tty");
     const output = NodeFS.createWriteStream("/dev/tty");
-    const prompt = NodeReadlinePromises.createInterface({ input, output });
+    const prompt = NodeReadline.createInterface({ input, output });
+    let rejectPendingQuestion;
     prompt.once("SIGINT", () => {
       cancelled = true;
+      rejectPendingQuestion?.(new Error("Installation cancelled."));
       prompt.close();
     });
     try {
       const answers = [];
-      for (const question of questions) answers.push(await prompt.question(question));
+      for (const question of questions) {
+        answers.push(
+          await new Promise((resolve, reject) => {
+            rejectPendingQuestion = reject;
+            prompt.question(question, (answer) => {
+              rejectPendingQuestion = undefined;
+              resolve(answer);
+            });
+          }),
+        );
+      }
       return answers;
     } finally {
+      rejectPendingQuestion = undefined;
       prompt.close();
       input.destroy();
       output.end();
