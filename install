@@ -493,6 +493,14 @@ async function installRuntime(baseDir, version, runtimeEnv) {
   }
 }
 
+function shellSingleQuote(value) {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+export function renderCliWrapper(baseDir, nodePath) {
+  return `#!/bin/sh\nexport T3CODE_HOME=${shellSingleQuote(baseDir)}\nexec ${shellSingleQuote(nodePath)} "$T3CODE_HOME/runtime/cli-launcher.mjs" "$@"\n`;
+}
+
 async function configureInstallation(baseDir, version) {
   const runtimeDir = NodePath.join(baseDir, "runtime");
   await NodeFSP.mkdir(runtimeDir, { recursive: true });
@@ -545,8 +553,7 @@ process.exit(child.status ?? 1);
 
   const binDir = NodePath.join(NodeOS.homedir(), ".local", "bin");
   await NodeFSP.mkdir(binDir, { recursive: true });
-  const quotedBaseDir = `'${baseDir.replaceAll("'", `'\\''`)}'`;
-  const wrapper = `#!/bin/sh\nexport T3CODE_HOME=${quotedBaseDir}\nexec node "$T3CODE_HOME/runtime/cli-launcher.mjs" "$@"\n`;
+  const wrapper = renderCliWrapper(baseDir, process.execPath);
   await NodeFSP.writeFile(NodePath.join(binDir, "t3"), wrapper, { mode: 0o700 });
   return binDir;
 }
