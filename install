@@ -333,7 +333,7 @@ async function writePrivateFileAtomically(filePath, contents) {
 }
 
 function validateRuntimeVersion(version) {
-  if (!/^\d+\.\d+\.\d+-sovereign\.g[a-f0-9]{7,64}$/u.test(version ?? "")) {
+  if (!/^\d+\.\d+\.\d+\+sovereign\.g[a-f0-9]{7,64}$/u.test(version ?? "")) {
     throw new Error("The requested sovereign runtime version is invalid.");
   }
   return version;
