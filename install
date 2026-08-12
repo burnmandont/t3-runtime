@@ -48,6 +48,7 @@ const ARTIFACT_FILE_NAME = "t3-sovereign-runtime-linux-x64.tar.gz";
 const MANIFEST_FILE_NAME = "linux-x64.manifest.json";
 const MAX_DOCUMENT_BYTES = 128 * 1024;
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
+const SMALL_DOCUMENT_TIMEOUT_MS = 15_000;
 const CONTROL_PLANE_DISCOVERY_PATH = "/.well-known/t3-sovereign.json";
 
 function normalizeOrigin(value, label) {
@@ -263,10 +264,19 @@ function verifySignedEnvelope(text, label) {
 }
 
 async function fetchSmallDocument(url, label) {
-  const response = await fetch(url, {
-    redirect: "follow",
-    signal: AbortSignal.timeout(60_000),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(SMALL_DOCUMENT_TIMEOUT_MS),
+    });
+  } catch (cause) {
+    const detail =
+      cause instanceof Error && cause.name === "TimeoutError"
+        ? "timed out after 15 seconds"
+        : "could not be downloaded";
+    throw new Error(`${label} ${detail}.`, { cause });
+  }
   if (!response.ok) throw new Error(`${label} returned HTTP ${response.status}.`);
   if (new URL(response.url).protocol !== "https:") {
     throw new Error(`${label} redirected away from HTTPS.`);
@@ -636,6 +646,7 @@ async function main() {
   }
   NodeChildProcess.execFileSync("tar", ["--version"], { stdio: "ignore" });
   const { command, requestedVersion } = parseArguments(process.argv.slice(2));
+  process.stdout.write("Checking the signed sovereign runtime release...\n");
   const version = await resolveVersion(requestedVersion);
   const baseDir = NodePath.resolve(
     process.env.T3CODE_HOME ?? NodePath.join(NodeOS.homedir(), ".local", "state", "t3-sovereign"),
