@@ -318,3 +318,4 @@ jobs:
           SOVEREIGN_GITHUB_TOKEN: ${{ github.token }}
           SOVEREIGN_DESKTOP_VERSION: ${{ env.DESKTOP_VERSION }}
           SOVEREIGN_DESKTOP_OUTPUT_DIR: release-assets
+        run: node infra/sovereign/ci/publish-desktop-release.mjs
