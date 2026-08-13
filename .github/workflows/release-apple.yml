@@ -14,6 +14,11 @@ on:
         description: Immutable desktop SemVer derived by sovereign CI
         required: true
         type: string
+      artifact_run_id:
+        description: Existing successful build run to publish without rebuilding
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: sovereign-apple-${{ github.event.client_payload.commit_sha || inputs.commit_sha }}
@@ -26,6 +31,7 @@ env:
   SOURCE_REPOSITORY_URL: https://source.moondiner.com/t3_fork/sovereign.git
   SOURCE_SHA: ${{ github.event.client_payload.commit_sha || inputs.commit_sha }}
   DESKTOP_VERSION: ${{ github.event.client_payload.desktop_version || inputs.desktop_version }}
+  ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id || '' }}
 
 jobs:
   validate-config:
@@ -47,6 +53,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ -z "$ARTIFACT_RUN_ID" || "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ ]]
           missing=false
           for name in \
             CSC_LINK \
@@ -87,6 +94,7 @@ jobs:
   build-desktop:
     name: Build macOS ${{ matrix.arch }}
     needs: validate-config
+    if: ${{ inputs.artifact_run_id == '' }}
     runs-on: macos-15
     timeout-minutes: 90
     strategy:
@@ -243,10 +251,14 @@ jobs:
 
   publish-desktop:
     name: Publish desktop update
-    needs: build-desktop
+    needs:
+      - validate-config
+      - build-desktop
+    if: ${{ always() && needs.validate-config.result == 'success' && (needs.build-desktop.result == 'success' || inputs.artifact_run_id != '') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Validate immutable release identity
@@ -290,12 +302,23 @@ jobs:
             args:
               - --filter=@t3tools/scripts...
 
-      - name: Download desktop assets
+      - name: Download desktop assets from this run
+        if: ${{ inputs.artifact_run_id == '' }}
         uses: actions/download-artifact@v8
         with:
           pattern: desktop-mac-*
           merge-multiple: true
           path: release-assets
+
+      - name: Download desktop assets from an existing run
+        if: ${{ inputs.artifact_run_id != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-mac-*
+          merge-multiple: true
+          path: release-assets
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Merge updater manifests
         shell: bash
