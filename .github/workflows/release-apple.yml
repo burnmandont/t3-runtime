@@ -23,7 +23,8 @@ permissions:
   contents: read
 
 env:
-  SOURCE_REPOSITORY_URL: https://source.moondiner.com/t3_fork/sovereign.git
+  SOURCE_REPOSITORY_URL: git@source.moondiner.com:t3_fork/sovereign.git
+  SOURCE_KNOWN_HOST: source.moondiner.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPzyGx1uSYb6xaps6hfR1YKWkE9oDfFLBDxv+xiTMITD
   SOURCE_SHA: ${{ github.event.client_payload.commit_sha || inputs.commit_sha }}
   DESKTOP_VERSION: ${{ github.event.client_payload.desktop_version || inputs.desktop_version }}
 
@@ -38,6 +39,7 @@ jobs:
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      GITEA_DEPLOY_KEY: ${{ secrets.GITEA_DEPLOY_KEY }}
     steps:
       - name: Validate immutable release identity and signing configuration
         shell: bash
@@ -51,7 +53,8 @@ jobs:
             CSC_KEY_PASSWORD \
             APPLE_API_KEY \
             APPLE_API_KEY_ID \
-            APPLE_API_ISSUER; do
+            APPLE_API_ISSUER \
+            GITEA_DEPLOY_KEY; do
             if [[ -z "${!name}" ]]; then
               echo "Missing GitHub Actions configuration: $name" >&2
               missing=true
@@ -79,6 +82,20 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+
+      - name: Configure read-only Gitea deploy key
+        shell: bash
+        env:
+          GITEA_DEPLOY_KEY: ${{ secrets.GITEA_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/gitea-deploy-key"
+          known_hosts_path="$RUNNER_TEMP/gitea-known-hosts"
+          printf '%s\n' "$GITEA_DEPLOY_KEY" > "$key_path"
+          printf '%s\n' "$SOURCE_KNOWN_HOST" > "$known_hosts_path"
+          chmod 600 "$key_path" "$known_hosts_path"
+          printf 'GIT_SSH_COMMAND=/usr/bin/ssh -i %q -o IdentitiesOnly=yes -o UserKnownHostsFile=%q\n' \
+            "$key_path" "$known_hosts_path" >> "$GITHUB_ENV"
 
       - name: Fetch exact source from Gitea
         shell: bash
@@ -202,6 +219,20 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+
+      - name: Configure read-only Gitea deploy key
+        shell: bash
+        env:
+          GITEA_DEPLOY_KEY: ${{ secrets.GITEA_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/gitea-deploy-key"
+          known_hosts_path="$RUNNER_TEMP/gitea-known-hosts"
+          printf '%s\n' "$GITEA_DEPLOY_KEY" > "$key_path"
+          printf '%s\n' "$SOURCE_KNOWN_HOST" > "$known_hosts_path"
+          chmod 600 "$key_path" "$known_hosts_path"
+          printf 'GIT_SSH_COMMAND=/usr/bin/ssh -i %q -o IdentitiesOnly=yes -o UserKnownHostsFile=%q\n' \
+            "$key_path" "$known_hosts_path" >> "$GITHUB_ENV"
 
       - name: Fetch exact release helpers from Gitea
         shell: bash
