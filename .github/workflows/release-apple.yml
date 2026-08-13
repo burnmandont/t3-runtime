@@ -202,8 +202,21 @@ jobs:
           dmgs=(release/*.dmg)
           test "${#dmgs[@]}" -gt 0
           for dmg in "${dmgs[@]}"; do
-            xcrun stapler validate "$dmg"
-            spctl --assess --type open --context context:primary-signature --verbose "$dmg"
+            mount_dir="$(mktemp -d "$RUNNER_TEMP/t3-desktop-dmg.XXXXXX")"
+            cleanup_mount() {
+              hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
+              rmdir "$mount_dir" >/dev/null 2>&1 || true
+            }
+            trap cleanup_mount EXIT
+            hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_dir" >/dev/null
+            apps=("$mount_dir"/*.app)
+            test "${#apps[@]}" -eq 1
+            app="${apps[0]}"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose "$app"
+            cleanup_mount
+            trap - EXIT
           done
 
       - name: Collect release assets
@@ -305,4 +318,3 @@ jobs:
           SOVEREIGN_GITHUB_TOKEN: ${{ github.token }}
           SOVEREIGN_DESKTOP_VERSION: ${{ env.DESKTOP_VERSION }}
           SOVEREIGN_DESKTOP_OUTPUT_DIR: release-assets
-        run: node infra/sovereign/ci/publish-desktop-release.mjs
