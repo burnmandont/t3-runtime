@@ -62,6 +62,21 @@ jobs:
           done
           test "$missing" = false
 
+      - name: Verify read-only Gitea source access
+        shell: bash
+        env:
+          GITEA_DEPLOY_KEY: ${{ secrets.GITEA_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/gitea-deploy-key"
+          known_hosts_path="$RUNNER_TEMP/gitea-known-hosts"
+          printf '%s\n' "$GITEA_DEPLOY_KEY" > "$key_path"
+          printf '%s\n' "$SOURCE_KNOWN_HOST" > "$known_hosts_path"
+          chmod 600 "$key_path" "$known_hosts_path"
+          /usr/bin/ssh-keygen -y -f "$key_path" | /usr/bin/ssh-keygen -lf -
+          GIT_SSH_COMMAND="/usr/bin/ssh -i $key_path -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts_path" \
+            git ls-remote "$SOURCE_REPOSITORY_URL" HEAD >/dev/null
+
   build-desktop:
     name: Build macOS ${{ matrix.arch }}
     needs: validate-config
