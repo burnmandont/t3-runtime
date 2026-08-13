@@ -28,8 +28,46 @@ env:
   DESKTOP_VERSION: ${{ github.event.client_payload.desktop_version || inputs.desktop_version }}
 
 jobs:
+  validate-config:
+    name: Validate release configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
+    steps:
+      - name: Validate immutable release identity and signing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          missing=false
+          for name in \
+            APPLE_TEAM_ID \
+            CLERK_PASSKEY_RP_DOMAINS \
+            CSC_LINK \
+            CSC_KEY_PASSWORD \
+            APPLE_API_KEY \
+            APPLE_API_KEY_ID \
+            APPLE_API_ISSUER \
+            MACOS_PROVISIONING_PROFILE; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing GitHub Actions configuration: $name" >&2
+              missing=true
+            fi
+          done
+          test "$missing" = false
+
   build-desktop:
     name: Build macOS ${{ matrix.arch }}
+    needs: validate-config
     runs-on: macos-15-intel
     timeout-minutes: 45
     strategy:
