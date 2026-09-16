@@ -593,14 +593,11 @@ function readConnectStatus(entryPath, baseDir, runtimeEnv) {
 
 function isBackgroundServiceActive() {
   if (process.platform === "linux") {
-    return (
-      NodeChildProcess.spawnSync(
-        "systemctl",
-        ["--user", "is-active", "--quiet", "t3code.service"],
-        {
+    return ["sovereign.service", "t3code.service"].some(
+      (unit) =>
+        NodeChildProcess.spawnSync("systemctl", ["--user", "is-active", "--quiet", unit], {
           stdio: "ignore",
-        },
-      ).status === 0
+        }).status === 0,
     );
   }
   if (process.platform === "darwin") {
@@ -618,10 +615,11 @@ function isBackgroundServiceActive() {
 function isBackgroundServiceInstalled() {
   if (process.platform === "darwin") return isBackgroundServiceActive();
   if (process.platform !== "linux") return false;
-  return (
-    NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "--quiet", "t3code.service"], {
-      stdio: "ignore",
-    }).status === 0
+  return ["sovereign.service", "t3code.service"].some(
+    (unit) =>
+      NodeChildProcess.spawnSync("systemctl", ["--user", "cat", "--quiet", unit], {
+        stdio: "ignore",
+      }).status === 0,
   );
 }
 
