@@ -725,7 +725,8 @@ if (isMainModule(import.meta.url)) await runInstaller();
 __T3_SOVEREIGN_INSTALLER_3B9C90F2__
 
 chmod 600 "$installer_module"
-if { exec 3</dev/tty; } 2>/dev/null; then
+if (: </dev/tty) 2>/dev/null; then
+  exec 3</dev/tty
   node "$installer_module" "$@" <&3
   exec 3<&-
 else
