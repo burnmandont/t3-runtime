@@ -31,6 +31,7 @@ trap 'exit 130' INT
 trap 'exit 143' HUP TERM
 
 cat > "$installer_module" <<'__T3_SOVEREIGN_INSTALLER_3B9C90F2__'
+/* oxlint-disable t3code/no-global-process-runtime -- Standalone distribution tool runs before workspace dependencies or an Effect runtime exist. */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
@@ -41,6 +42,7 @@ import * as NodeStream from "node:stream";
 import * as NodeStreamPromises from "node:stream/promises";
 import * as NodeURL from "node:url";
 
+const CHANNEL = "stable";
 const CHANNEL_URL = "https://get.moondiner.com/channels/stable.json";
 const RELEASE_BASE_URL = "https://github.com/burnmandont/t3-runtime/releases/download";
 const PUBLIC_KEY_SPKI_B64 = "MCowBQYDK2VwAyEAbMqRaKrlC46OFIfPkWWbAvddlcBDFcjLhtHpRCURGf4=";
@@ -343,7 +345,7 @@ async function writePrivateFileAtomically(filePath, contents) {
 }
 
 function validateRuntimeVersion(version) {
-  if (!/^\d+\.\d+\.\d+\+sovereign\.g[a-f0-9]{7,64}$/u.test(version ?? "")) {
+  if (!/^\d+\.\d+\.\d+\+sovereign(?:\.dev)?\.g[a-f0-9]{7,64}$/u.test(version ?? "")) {
     throw new Error("The requested sovereign runtime version is invalid.");
   }
   return version;
@@ -361,19 +363,19 @@ function parseArguments(args) {
 async function resolveVersion(requestedVersion) {
   if (requestedVersion !== undefined) return requestedVersion;
   const payload = verifySignedEnvelope(
-    await fetchSmallDocument(CHANNEL_URL, "Stable channel"),
-    "Stable channel",
+    await fetchSmallDocument(CHANNEL_URL, `${CHANNEL} channel`),
+    `${CHANNEL} channel`,
   );
   if (
     payload.schemaVersion !== 1 ||
-    payload.channel !== "stable" ||
+    payload.channel !== CHANNEL ||
     !/^[a-f0-9]{7,64}$/u.test(payload.commit ?? "")
   ) {
-    throw new Error("The verified stable channel is invalid.");
+    throw new Error(`The verified ${CHANNEL} channel is invalid.`);
   }
   const version = validateRuntimeVersion(payload.version);
   if (!version.endsWith(`g${payload.commit.slice(0, 12)}`)) {
-    throw new Error("The stable channel version does not match its commit.");
+    throw new Error(`The ${CHANNEL} channel version does not match its commit.`);
   }
   return version;
 }
@@ -521,6 +523,8 @@ async function configureInstallation(baseDir, version) {
   await NodeFSP.mkdir(runtimeDir, { recursive: true });
   const source = {
     schemaVersion: 2,
+    channel: CHANNEL,
+    channelUrl: CHANNEL_URL,
     releaseBaseUrl: RELEASE_BASE_URL.replace(/\/$/u, ""),
     publicKeySpkiB64: PUBLIC_KEY_SPKI_B64,
   };
@@ -674,12 +678,21 @@ export function runRequestedCommand(entryPath, baseDir, command, runtimeEnv) {
   });
 }
 
-export function resolveInstallerHome(env = process.env) {
-  return NodePath.resolve(
-    env.SOVEREIGN_HOME?.trim() ||
-      env.T3CODE_HOME?.trim() ||
-      NodePath.join(NodeOS.homedir(), ".local", "state", "t3-sovereign"),
-  );
+export function resolveInstallerHome(env = process.env, homeDirectory = NodeOS.homedir()) {
+  const override = env.SOVEREIGN_HOME?.trim() || env.T3CODE_HOME?.trim();
+  if (override) return NodePath.resolve(override);
+
+  const current = NodePath.join(homeDirectory, ".local", "state", "sovereign");
+  const legacy = NodePath.join(homeDirectory, ".local", "state", "t3-sovereign");
+  const hasLegacy = NodeFS.existsSync(legacy);
+  if (hasLegacy && NodeFS.existsSync(current)) {
+    if (NodeFS.realpathSync(legacy) === NodeFS.realpathSync(current)) return current;
+    throw new Error(
+      `Both Sovereign homes exist: ${current} and ${legacy}. Set SOVEREIGN_HOME to select the existing environment to use.`,
+    );
+  }
+  // Reuse existing identities and service paths; upgrades never move state implicitly.
+  return hasLegacy ? legacy : current;
 }
 
 async function main() {
