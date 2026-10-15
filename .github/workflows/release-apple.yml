@@ -248,6 +248,36 @@ jobs:
           printf '%s' "$APPLE_API_KEY_CONTENT" > "$key_path"
           printf 'APPLE_API_KEY=%s\n' "$key_path" >> "$GITHUB_ENV"
 
+      - name: Retry transient Apple ticket downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          real_xcrun="$(command -v xcrun)"
+          retry_bin="$RUNNER_TEMP/sovereign-notary-bin"
+          mkdir -p "$retry_bin"
+          cat > "$retry_bin/xcrun" <<'SH'
+          #!/bin/bash
+          set -uo pipefail
+          if [[ "${1:-}" != "stapler" || "${2:-}" != "staple" ]]; then
+            exec "$SOVEREIGN_REAL_XCRUN" "$@"
+          fi
+          for delay in 0 15 30 60; do
+            if [[ "$delay" -gt 0 ]]; then
+              printf 'Apple ticket download failed (68); retrying staple in %ss\n' "$delay" >&2
+              sleep "$delay"
+            fi
+            "$SOVEREIGN_REAL_XCRUN" "$@"
+            status=$?
+            if [[ "$status" -ne 68 ]]; then
+              exit "$status"
+            fi
+          done
+          exit "$status"
+          SH
+          chmod 700 "$retry_bin/xcrun"
+          printf 'SOVEREIGN_REAL_XCRUN=%s\n' "$real_xcrun" >> "$GITHUB_ENV"
+          printf '%s\n' "$retry_bin" >> "$GITHUB_PATH"
+
       - name: Build signed and notarized desktop artifact
         shell: bash
         env:
