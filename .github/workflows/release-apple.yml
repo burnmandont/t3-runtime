@@ -18,6 +18,20 @@ on:
         description: Monotonically increasing TestFlight build number derived by sovereign CI
         required: true
         type: string
+      clients:
+        description: Clients to build and publish
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - desktop
+          - ios
+      runtime_version:
+        description: Existing compatible Sovereign SSH runtime version (blank uses source commit)
+        required: false
+        default: ""
+        type: string
       artifact_run_id:
         description: Existing successful build run to publish without rebuilding
         required: false
@@ -42,6 +56,8 @@ env:
   DESKTOP_VERSION: ${{ github.event.client_payload.desktop_version || inputs.desktop_version }}
   IOS_BUILD_NUMBER: ${{ github.event.client_payload.ios_build_number || inputs.ios_build_number }}
   ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id || '' }}
+  RELEASE_CLIENTS: ${{ github.event.client_payload.clients || inputs.clients || 'all' }}
+  T3CODE_SSH_RUNTIME_VERSION: ${{ github.event.client_payload.runtime_version || inputs.runtime_version || '' }}
   BUILD_ONLY: ${{ github.event.client_payload.build_only || inputs.build_only || false }}
 
 jobs:
@@ -51,6 +67,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       build_only: ${{ steps.release-mode.outputs.build_only }}
+      clients: ${{ steps.release-mode.outputs.clients }}
     env:
       CSC_LINK: ${{ secrets.CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -69,26 +86,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$BUILD_ONLY" == "true" || "$BUILD_ONLY" == "false" ]]
+          [[ "$BUILD_ONLY" == "true" || "$BUILD_ONLY" == "false" ]] || exit 1
+          [[ "$RELEASE_CLIENTS" == "all" || "$RELEASE_CLIENTS" == "desktop" || "$RELEASE_CLIENTS" == "ios" ]] || exit 1
+          [[ "$BUILD_ONLY" != "true" || "$RELEASE_CLIENTS" != "ios" ]] || exit 1
+          [[ -z "$ARTIFACT_RUN_ID" || "$RELEASE_CLIENTS" != "ios" ]] || exit 1
+          [[ -z "$T3CODE_SSH_RUNTIME_VERSION" || "$T3CODE_SSH_RUNTIME_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+sovereign\.g[a-f0-9]{12}$ ]] || exit 1
+          printf 'clients=%s\n' "$RELEASE_CLIENTS" >> "$GITHUB_OUTPUT"
           printf 'build_only=%s\n' "$BUILD_ONLY" >> "$GITHUB_OUTPUT"
 
       - name: Validate immutable release identity and signing configuration
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           if [[ "$BUILD_ONLY" == "true" ]]; then
-            [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
+            [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || exit 1
             test -z "$ARTIFACT_RUN_ID"
           else
-            [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-            [[ "$IOS_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+            [[ "$IOS_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || exit 1
           fi
-          [[ -z "$ARTIFACT_RUN_ID" || "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ -z "$ARTIFACT_RUN_ID" || "$ARTIFACT_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
           missing=false
           for name in \
-            CSC_LINK \
-            CSC_KEY_PASSWORD \
             APPLE_API_KEY \
             APPLE_API_KEY_ID \
             APPLE_API_ISSUER \
@@ -100,7 +120,15 @@ jobs:
               missing=true
             fi
           done
-          if [[ "$BUILD_ONLY" != "true" ]]; then
+          if [[ "$RELEASE_CLIENTS" != "ios" ]]; then
+            for name in CSC_LINK CSC_KEY_PASSWORD; do
+              if [[ -z "${!name}" ]]; then
+                echo "Missing GitHub Actions configuration: $name" >&2
+                missing=true
+              fi
+            done
+          fi
+          if [[ "$BUILD_ONLY" != "true" && "$RELEASE_CLIENTS" != "desktop" ]]; then
             for name in \
               IOS_DEVELOPMENT_CERTIFICATE_P12 \
               IOS_DEVELOPMENT_CERTIFICATE_PASSWORD \
@@ -110,7 +138,7 @@ jobs:
                 missing=true
               fi
             done
-            [[ "$IOS_BUNDLE_ID" =~ ^[A-Za-z0-9-]+([.][A-Za-z0-9-]+)+$ ]]
+            [[ "$IOS_BUNDLE_ID" =~ ^[A-Za-z0-9-]+([.][A-Za-z0-9-]+)+$ ]] || exit 1
           fi
           test "$missing" = false
 
@@ -138,7 +166,7 @@ jobs:
   build-desktop:
     name: Build macOS ${{ matrix.arch }}
     needs: validate-config
-    if: ${{ inputs.artifact_run_id == '' }}
+    if: ${{ inputs.artifact_run_id == '' && needs.validate-config.outputs.clients != 'ios' }}
     runs-on: macos-15
     timeout-minutes: 90
     strategy:
@@ -304,8 +332,10 @@ jobs:
 
   build-ios:
     name: Build and upload iOS TestFlight
+    permissions:
+      contents: write
     needs: validate-config
-    if: ${{ inputs.artifact_run_id == '' && needs.validate-config.outputs.build_only != 'true' }}
+    if: ${{ inputs.artifact_run_id == '' && needs.validate-config.outputs.build_only != 'true' && needs.validate-config.outputs.clients != 'desktop' }}
     runs-on: macos-15
     timeout-minutes: 120
     env:
@@ -502,6 +532,12 @@ jobs:
             -authenticationKeyID "$APPLE_API_KEY_ID" \
             -authenticationKeyIssuerID "$APPLE_API_ISSUER"
 
+      - name: Record successful TestFlight upload
+        env:
+          SOVEREIGN_GITHUB_REPOSITORY: ${{ github.repository }}
+          SOVEREIGN_GITHUB_TOKEN: ${{ github.token }}
+        run: node infra/sovereign/ci/publication-receipt.mjs
+
       - name: Remove temporary Apple signing material
         if: always()
         shell: bash
@@ -520,7 +556,7 @@ jobs:
     needs:
       - validate-config
       - build-desktop
-    if: ${{ always() && needs.validate-config.result == 'success' && needs.validate-config.outputs.build_only != 'true' && (needs.build-desktop.result == 'success' || inputs.artifact_run_id != '') }}
+    if: ${{ always() && needs.validate-config.result == 'success' && needs.validate-config.outputs.clients != 'ios' && needs.validate-config.outputs.build_only != 'true' && (needs.build-desktop.result == 'success' || inputs.artifact_run_id != '') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
