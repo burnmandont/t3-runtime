@@ -248,7 +248,7 @@ jobs:
           printf '%s' "$APPLE_API_KEY_CONTENT" > "$key_path"
           printf 'APPLE_API_KEY=%s\n' "$key_path" >> "$GITHUB_ENV"
 
-      - name: Retry transient Apple ticket downloads
+      - name: Retry transient Apple ticket requests
         shell: bash
         run: |
           set -euo pipefail
@@ -258,12 +258,12 @@ jobs:
           cat > "$retry_bin/xcrun" <<'SH'
           #!/bin/bash
           set -uo pipefail
-          if [[ "${1:-}" != "stapler" || "${2:-}" != "staple" ]]; then
+          if [[ "${1:-}" != "stapler" || ( "${2:-}" != "staple" && "${2:-}" != "validate" ) ]]; then
             exec "$SOVEREIGN_REAL_XCRUN" "$@"
           fi
           for delay in 0 15 30 60; do
             if [[ "$delay" -gt 0 ]]; then
-              printf 'Apple ticket download failed (68); retrying staple in %ss\n' "$delay" >&2
+              printf 'Apple ticket request failed (68); retrying %s in %ss\n' "$2" "$delay" >&2
               sleep "$delay"
             fi
             "$SOVEREIGN_REAL_XCRUN" "$@"
