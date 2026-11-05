@@ -716,11 +716,7 @@ async function main() {
     assertEnvironmentNotRetired(readConnectStatus(entryPath, baseDir, runtimeEnv), baseDir);
   }
   const binDir = await configureInstallation(baseDir, version);
-  // An installed boot service is launcher-pinned through service-state.json.
-  // Merely writing current-version would leave both the stable CLI wrapper and
-  // the live child on the previous release. Reconcile through the runtime's
-  // service command so it replaces the launcher/state atomically and restarts
-  // the service, while preserving the existing repair path on failure.
+  // Reconcile the pinned service launcher and child together; current-version alone leaves them on the old release.
   reconcileInstalledBackgroundService(entryPath, baseDir, runtimeEnv);
   process.stdout.write(`Installed verified Sovereign ${version}.\n`);
   if (!(process.env.PATH ?? "").split(NodePath.delimiter).includes(binDir)) {
