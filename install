@@ -48,7 +48,7 @@ const RELEASE_BASE_URL = "https://github.com/burnmandont/t3-runtime/releases/dow
 const PUBLIC_KEY_SPKI_B64 = "MCowBQYDK2VwAyEAbMqRaKrlC46OFIfPkWWbAvddlcBDFcjLhtHpRCURGf4=";
 const MAX_DOCUMENT_BYTES = 128 * 1024;
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
-const CONTROL_PLANE_DISCOVERY_PATH = "/.well-known/t3-sovereign.json";
+const CONTROL_PLANE_DISCOVERY_PATH = "/.well-known/sovereign.json";
 
 function resolveRuntimeTarget() {
   const key = `${process.platform}-${process.arch}`;
@@ -290,7 +290,7 @@ async function fetchSmallDocument(url, label) {
   return bytes.toString("utf8");
 }
 
-async function fetchControlPlaneDocument(origin) {
+export async function fetchControlPlaneDocument(origin) {
   let response;
   try {
     response = await fetch(new URL(CONTROL_PLANE_DISCOVERY_PATH, origin), {
